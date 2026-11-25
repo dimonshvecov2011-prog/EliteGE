@@ -185,6 +185,7 @@ private:
         vk::PhysicalDeviceFeatures features{};
         vk::DeviceCreateInfo info({}, queues, {}, DEVICE_EXTENSIONS, &features);
         device = physicalDevice.createDeviceUnique(info);
+        VULKAN_HPP_DEFAULT_DISPATCHER.init(*device);
         graphicsQueue = device->getQueue(graphicsFamily, 0);
         presentQueue = device->getQueue(presentFamily, 0);
     }
