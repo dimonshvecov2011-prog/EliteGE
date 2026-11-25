@@ -1,30 +1,30 @@
 cmake_minimum_required(VERSION 3.20)
 project(EliteGE VERSION 0.1.0 LANGUAGES CXX)
-
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-
 find_package(Vulkan REQUIRED)
-
+find_program(GLSLC glslc HINTS "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/bin" REQUIRED)
 include(FetchContent)
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(glfw
-    GIT_REPOSITORY https://github.com/glfw/glfw.git
-    GIT_TAG 3.3.8
-    GIT_SHALLOW TRUE)
-FetchContent_Declare(glm
-    GIT_REPOSITORY https://github.com/g-truc/glm.git
-    GIT_TAG 1.0.1
-    GIT_SHALLOW TRUE)
+FetchContent_Declare(glfw GIT_REPOSITORY https://github.com/glfw/glfw.git GIT_TAG 3.3.8 GIT_SHALLOW TRUE)
+FetchContent_Declare(glm GIT_REPOSITORY https://github.com/g-truc/glm.git GIT_TAG 1.0.1 GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(glfw glm)
-
+set(SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
+file(MAKE_DIRECTORY "${SHADER_OUTPUT_DIR}")
+add_custom_command(OUTPUT "${SHADER_OUTPUT_DIR}/quad.vert.spv"
+    COMMAND "${GLSLC}" -DVERTEX_SHADER -fshader-stage=vert "${CMAKE_CURRENT_SOURCE_DIR}/shaders/quad.glsl" -o "${SHADER_OUTPUT_DIR}/quad.vert.spv"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/quad.glsl")
+add_custom_command(OUTPUT "${SHADER_OUTPUT_DIR}/quad.frag.spv"
+    COMMAND "${GLSLC}" -fshader-stage=frag "${CMAKE_CURRENT_SOURCE_DIR}/shaders/quad.glsl" -o "${SHADER_OUTPUT_DIR}/quad.frag.spv"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/quad.glsl")
+add_custom_target(EliteGEShaders DEPENDS "${SHADER_OUTPUT_DIR}/quad.vert.spv" "${SHADER_OUTPUT_DIR}/quad.frag.spv")
 add_executable(EliteGE main.cpp)
+add_dependencies(EliteGE EliteGEShaders)
+target_compile_definitions(EliteGE PRIVATE GLFW_INCLUDE_NONE ELITEGE_SHADER_DIR="${SHADER_OUTPUT_DIR}")
 target_link_libraries(EliteGE PRIVATE Vulkan::Vulkan glfw glm::glm)
-target_compile_definitions(EliteGE PRIVATE GLFW_INCLUDE_NONE)
-
 if(MSVC)
     target_compile_options(EliteGE PRIVATE /W4)
 else()

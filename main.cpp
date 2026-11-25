@@ -2,357 +2,64 @@
 #include <array>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <optional>
 #include <set>
 #include <stdexcept>
 #include <vector>
-
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #include <vulkan/vulkan.hpp>
 #include <GLFW/glfw3.h>
-#include <glm/glm.hpp>
-
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
-
 namespace {
-constexpr uint32_t WIDTH = 1280;
-constexpr uint32_t HEIGHT = 720;
-constexpr size_t MAX_FRAMES_IN_FLIGHT = 2;
+constexpr uint32_t WIDTH=1280, HEIGHT=720; constexpr size_t FRAMES=2;
 #ifdef NDEBUG
-constexpr bool ENABLE_VALIDATION = false;
+constexpr bool VALIDATION=false;
 #else
-constexpr bool ENABLE_VALIDATION = true;
+constexpr bool VALIDATION=true;
 #endif
-const std::vector<const char*> VALIDATION_LAYERS = {"VK_LAYER_KHRONOS_validation"};
-const std::vector<const char*> DEVICE_EXTENSIONS = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-
-VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
-    VkDebugUtilsMessageSeverityFlagBitsEXT severity,
-    VkDebugUtilsMessageTypeFlagsEXT,
-    const VkDebugUtilsMessengerCallbackDataEXT* data, void*) {
-    if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
-        std::cerr << "[Vulkan] " << data->pMessage << '\n';
-    return VK_FALSE;
+const std::vector<const char*> LAYERS={"VK_LAYER_KHRONOS_validation"};
+const std::vector<const char*> EXTENSIONS={VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT s,VkDebugUtilsMessageTypeFlagsEXT,const VkDebugUtilsMessengerCallbackDataEXT* d,void*){if(s>=VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)std::cerr<<"[Vulkan] "<<d->pMessage<<'\n';return VK_FALSE;}
+struct Families {std::optional<uint32_t> graphics,present; bool complete()const{return graphics&&present;}};
+struct Vertex {float position[2]; float color[3];};
+const std::array<Vertex,6> QUAD={Vertex{{-0.55f,-0.55f},{1,0,0}},Vertex{{0.55f,-0.55f},{0,1,0}},Vertex{{0.55f,0.55f},{0,0,1}},Vertex{{-0.55f,-0.55f},{1,0,0}},Vertex{{0.55f,0.55f},{0,0,1}},Vertex{{-0.55f,0.55f},{1,1,0}}};
 }
-
-struct QueueFamilies {
-    std::optional<uint32_t> graphics;
-    std::optional<uint32_t> present;
-    bool complete() const { return graphics.has_value() && present.has_value(); }
-};
-}
-
 class VulkanApp {
 public:
-    void run() {
-        initWindow();
-        initVulkan();
-        mainLoop();
-        cleanup();
-    }
-
+ void run(){initWindow();initVulkan();mainLoop();cleanup();}
 private:
-    GLFWwindow* window = nullptr;
-    vk::UniqueInstance instance;
-    vk::UniqueDebugUtilsMessengerEXT debugMessenger;
-    vk::SurfaceKHR surface{};
-    vk::PhysicalDevice physicalDevice{};
-    vk::UniqueDevice device;
-    vk::Queue graphicsQueue{}, presentQueue{};
-    uint32_t graphicsFamily = 0, presentFamily = 0;
-    vk::UniqueSwapchainKHR swapchain;
-    std::vector<vk::Image> swapchainImages;
-    vk::Format swapchainFormat{};
-    vk::Extent2D swapchainExtent{};
-    std::vector<vk::UniqueImageView> imageViews;
-    vk::UniqueRenderPass renderPass;
-    std::vector<vk::UniqueFramebuffer> framebuffers;
-    vk::UniqueCommandPool commandPool;
-    std::vector<vk::UniqueCommandBuffer> commandBuffers;
-    std::array<vk::UniqueSemaphore, MAX_FRAMES_IN_FLIGHT> imageAvailable;
-    std::array<vk::UniqueSemaphore, MAX_FRAMES_IN_FLIGHT> renderFinished;
-    std::array<vk::UniqueFence, MAX_FRAMES_IN_FLIGHT> fences;
-    size_t currentFrame = 0;
-    bool framebufferResized = false;
-
-    void initWindow() {
-        if (!glfwInit()) throw std::runtime_error("GLFW initialization failed");
-        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        window = glfwCreateWindow(WIDTH, HEIGHT, "GameVault Engine MVP", nullptr, nullptr);
-        if (!window) throw std::runtime_error("GLFW window creation failed");
-        glfwSetWindowUserPointer(window, this);
-        glfwSetFramebufferSizeCallback(window, [](GLFWwindow* w, int, int) {
-            static_cast<VulkanApp*>(glfwGetWindowUserPointer(w))->framebufferResized = true;
-        });
-    }
-
-    void initVulkan() {
-        createInstance();
-        createDebugMessenger();
-        if (glfwCreateWindowSurface(*instance, window, nullptr,
-                                    reinterpret_cast<VkSurfaceKHR*>(&surface)) != VK_SUCCESS)
-            throw std::runtime_error("Window surface creation failed");
-        pickPhysicalDevice();
-        createDevice();
-        createSwapchain();
-        createImageViews();
-        createRenderPass();
-        createFramebuffers();
-        createCommandPool();
-        allocateCommandBuffers();
-        createSyncObjects();
-    }
-
-    static bool hasValidationLayers() {
-        const auto available = vk::enumerateInstanceLayerProperties();
-        return std::all_of(VALIDATION_LAYERS.begin(), VALIDATION_LAYERS.end(),
-            [&](const char* wanted) {
-                return std::any_of(available.begin(), available.end(),
-                    [&](const auto& layer) { return std::strcmp(layer.layerName, wanted) == 0; });
-            });
-    }
-
-    void createInstance() {
-        VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
-        if (ENABLE_VALIDATION && !hasValidationLayers())
-            throw std::runtime_error("VK_LAYER_KHRONOS_validation is not installed");
-        uint32_t count = 0;
-        const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&count);
-        if (!glfwExtensions) throw std::runtime_error("GLFW Vulkan extensions unavailable");
-        std::vector<const char*> extensions(glfwExtensions, glfwExtensions + count);
-        if (ENABLE_VALIDATION) extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-        vk::ApplicationInfo app("GameVault Engine MVP", 1, "EliteGE", 1, VK_API_VERSION_1_0);
-        vk::InstanceCreateInfo info({}, &app,
-            ENABLE_VALIDATION ? static_cast<uint32_t>(VALIDATION_LAYERS.size()) : 0,
-            ENABLE_VALIDATION ? VALIDATION_LAYERS.data() : nullptr,
-            static_cast<uint32_t>(extensions.size()), extensions.data());
-        instance = vk::createInstanceUnique(info);
-        VULKAN_HPP_DEFAULT_DISPATCHER.init(*instance);
-    }
-
-    void createDebugMessenger() {
-        if (!ENABLE_VALIDATION) return;
-        vk::DebugUtilsMessengerCreateInfoEXT info({},
-            vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
-            vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,
-            vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
-            vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
-            vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance, debugCallback);
-        debugMessenger = instance->createDebugUtilsMessengerEXTUnique(info);
-    }
-
-    QueueFamilies findQueueFamilies(vk::PhysicalDevice gpu) const {
-        QueueFamilies result;
-        const auto properties = gpu.getQueueFamilyProperties();
-        for (uint32_t i = 0; i < properties.size(); ++i) {
-            if (properties[i].queueFlags & vk::QueueFlagBits::eGraphics) result.graphics = i;
-            if (gpu.getSurfaceSupportKHR(i, surface)) result.present = i;
-            if (result.complete()) break;
-        }
-        return result;
-    }
-
-    bool supportsDevice(vk::PhysicalDevice gpu) const {
-        const auto extensions = gpu.enumerateDeviceExtensionProperties();
-        return std::all_of(DEVICE_EXTENSIONS.begin(), DEVICE_EXTENSIONS.end(),
-            [&](const char* wanted) {
-                return std::any_of(extensions.begin(), extensions.end(),
-                    [&](const auto& ext) { return std::strcmp(ext.extensionName, wanted) == 0; });
-            });
-    }
-
-    void pickPhysicalDevice() {
-        for (const auto& gpu : instance->enumeratePhysicalDevices()) {
-            if (supportsDevice(gpu) && findQueueFamilies(gpu).complete()) {
-                physicalDevice = gpu;
-                return;
-            }
-        }
-        throw std::runtime_error("No suitable Vulkan GPU found");
-    }
-
-    void createDevice() {
-        const QueueFamilies families = findQueueFamilies(physicalDevice);
-        graphicsFamily = *families.graphics;
-        presentFamily = *families.present;
-        const std::set<uint32_t> uniqueFamilies = {graphicsFamily, presentFamily};
-        const float priority = 1.0f;
-        std::vector<vk::DeviceQueueCreateInfo> queues;
-        for (uint32_t family : uniqueFamilies)
-            queues.emplace_back(vk::DeviceQueueCreateFlags{}, family, 1, &priority);
-        vk::PhysicalDeviceFeatures features{};
-        vk::DeviceCreateInfo info({}, queues, {}, DEVICE_EXTENSIONS, &features);
-        device = physicalDevice.createDeviceUnique(info);
-        VULKAN_HPP_DEFAULT_DISPATCHER.init(*device);
-        graphicsQueue = device->getQueue(graphicsFamily, 0);
-        presentQueue = device->getQueue(presentFamily, 0);
-    }
-
-    vk::SurfaceFormatKHR chooseFormat(const std::vector<vk::SurfaceFormatKHR>& formats) const {
-        for (const auto& format : formats)
-            if (format.format == vk::Format::eB8G8R8A8Srgb &&
-                format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear) return format;
-        return formats.front();
-    }
-
-    vk::PresentModeKHR choosePresentMode(const std::vector<vk::PresentModeKHR>& modes) const {
-        for (auto mode : modes) if (mode == vk::PresentModeKHR::eMailbox) return mode;
-        return vk::PresentModeKHR::eFifo;
-    }
-
-    vk::Extent2D chooseExtent(const vk::SurfaceCapabilitiesKHR& caps) const {
-        if (caps.currentExtent.width != std::numeric_limits<uint32_t>::max()) return caps.currentExtent;
-        int width = 0, height = 0;
-        glfwGetFramebufferSize(window, &width, &height);
-        vk::Extent2D extent{static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
-        extent.width = std::clamp(extent.width, caps.minImageExtent.width, caps.maxImageExtent.width);
-        extent.height = std::clamp(extent.height, caps.minImageExtent.height, caps.maxImageExtent.height);
-        return extent;
-    }
-
-    void createSwapchain() {
-        const auto caps = physicalDevice.getSurfaceCapabilitiesKHR(surface);
-        const auto format = chooseFormat(physicalDevice.getSurfaceFormatsKHR(surface));
-        const auto mode = choosePresentMode(physicalDevice.getSurfacePresentModesKHR(surface));
-        uint32_t imageCount = caps.minImageCount + 1;
-        if (caps.maxImageCount && imageCount > caps.maxImageCount) imageCount = caps.maxImageCount;
-        swapchainExtent = chooseExtent(caps);
-        vk::SwapchainCreateInfoKHR info({}, surface, imageCount, format.format, format.colorSpace,
-            swapchainExtent, 1, vk::ImageUsageFlagBits::eColorAttachment);
-        const uint32_t families[] = {graphicsFamily, presentFamily};
-        if (graphicsFamily != presentFamily)
-            info.setImageSharingMode(vk::SharingMode::eConcurrent).setQueueFamilyIndices(families);
-        else info.setImageSharingMode(vk::SharingMode::eExclusive);
-        info.setPreTransform(caps.currentTransform).setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eOpaque)
-            .setPresentMode(mode).setClipped(VK_TRUE);
-        swapchain = device->createSwapchainKHRUnique(info);
-        swapchainImages = device->getSwapchainImagesKHR(*swapchain);
-        swapchainFormat = format.format;
-    }
-
-    void createImageViews() {
-        for (auto image : swapchainImages) {
-            vk::ImageViewCreateInfo info({}, image, vk::ImageViewType::e2D, swapchainFormat, {},
-                {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
-            imageViews.push_back(device->createImageViewUnique(info));
-        }
-    }
-
-    void createRenderPass() {
-        vk::AttachmentDescription attachment({}, swapchainFormat, vk::SampleCountFlagBits::e1,
-            vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
-            vk::AttachmentLoadOp::eDontCare, vk::AttachmentStoreOp::eDontCare,
-            vk::ImageLayout::eUndefined, vk::ImageLayout::ePresentSrcKHR);
-        vk::AttachmentReference reference(0, vk::ImageLayout::eColorAttachmentOptimal);
-        vk::SubpassDescription subpass({}, vk::PipelineBindPoint::eGraphics, {}, nullptr, 1, &reference);
-        renderPass = device->createRenderPassUnique({{}, 1, &attachment, 1, &subpass});
-    }
-
-    void createFramebuffers() {
-        for (const auto& view : imageViews) {
-            vk::ImageView handle = view.get();
-            vk::FramebufferCreateInfo info({}, *renderPass, 1, &handle,
-                swapchainExtent.width, swapchainExtent.height, 1);
-            framebuffers.push_back(device->createFramebufferUnique(info));
-        }
-    }
-
-    void createCommandPool() {
-        commandPool = device->createCommandPoolUnique({vk::CommandPoolCreateFlagBits::eResetCommandBuffer, graphicsFamily});
-    }
-
-    void allocateCommandBuffers() {
-        commandBuffers = device->allocateCommandBuffersUnique({*commandPool, vk::CommandBufferLevel::ePrimary,
-                                                                static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT)});
-    }
-
-    void createSyncObjects() {
-        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-            imageAvailable[i] = device->createSemaphoreUnique({});
-            renderFinished[i] = device->createSemaphoreUnique({});
-            fences[i] = device->createFenceUnique({vk::FenceCreateFlagBits::eSignaled});
-        }
-    }
-
-    void recreateSwapchain() {
-        int width = 0, height = 0;
-        glfwGetFramebufferSize(window, &width, &height);
-        while ((width == 0 || height == 0) && !glfwWindowShouldClose(window)) {
-            glfwGetFramebufferSize(window, &width, &height);
-            glfwWaitEvents();
-        }
-        if (glfwWindowShouldClose(window)) return;
-        device->waitIdle();
-        framebuffers.clear(); imageViews.clear(); swapchain.reset();
-        createSwapchain(); createImageViews(); createFramebuffers();
-    }
-
-    void drawFrame() {
-        vk::Fence currentFence = fences[currentFrame].get();
-        vk::Result fenceResult = device->waitForFences(1, &currentFence, VK_TRUE, UINT64_MAX);
-        (void)fenceResult;
-        uint32_t imageIndex = 0;
-        vk::Result result;
-        try {
-            auto acquired = device->acquireNextImageKHR(*swapchain, UINT64_MAX,
-                *imageAvailable[currentFrame], {});
-            result = acquired.result; imageIndex = acquired.value;
-        } catch (const vk::OutOfDateKHRError&) { recreateSwapchain(); return; }
-        if (result == vk::Result::eSuboptimalKHR || framebufferResized) {
-            framebufferResized = false; recreateSwapchain(); return;
-        }
-        vk::Result resetResult = device->resetFences(1, &currentFence);
-        (void)resetResult;
-        auto& command = commandBuffers[currentFrame];
-        command->reset();
-        vk::CommandBufferBeginInfo beginInfo{};
-        command->begin(beginInfo);
-        glm::vec4 color(0.02f, 0.04f, 0.14f, 1.0f);
-        vk::ClearValue clear(std::array<float, 4>{color.r, color.g, color.b, color.a});
-        vk::RenderPassBeginInfo pass(*renderPass, *framebuffers[imageIndex], {{0, 0}, swapchainExtent}, 1, &clear);
-        command->beginRenderPass(pass, vk::SubpassContents::eInline); command->endRenderPass(); command->end();
-        vk::PipelineStageFlags waitStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-        vk::SubmitInfo submit(1, &imageAvailable[currentFrame].get(), &waitStage, 1,
-                              &command.get(), 1, &renderFinished[currentFrame].get());
-        graphicsQueue.submit(submit, *fences[currentFrame]);
-        vk::PresentInfoKHR present(1, &renderFinished[currentFrame].get(), 1, &swapchain.get(), &imageIndex);
-        try { result = presentQueue.presentKHR(present); }
-        catch (const vk::OutOfDateKHRError&) { result = vk::Result::eErrorOutOfDateKHR; }
-        if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR || framebufferResized) {
-            framebufferResized = false; recreateSwapchain();
-        }
-        currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
-    }
-
-    void mainLoop() {
-        while (!glfwWindowShouldClose(window)) {
-            glfwPollEvents();
-            if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(window, GLFW_TRUE);
-            drawFrame();
-        }
-    }
-
-    void cleanup() {
-        if (device) device->waitIdle();
-        for (auto& semaphore : imageAvailable) semaphore.reset();
-        for (auto& semaphore : renderFinished) semaphore.reset();
-        for (auto& fence : fences) fence.reset();
-        commandBuffers.clear(); commandPool.reset(); framebuffers.clear(); renderPass.reset();
-        imageViews.clear(); swapchain.reset(); device.reset();
-        if (instance && surface) instance->destroySurfaceKHR(surface);
-        debugMessenger.reset(); instance.reset();
-        if (window) glfwDestroyWindow(window);
-        glfwTerminate();
-    }
+ GLFWwindow* window=nullptr; vk::UniqueInstance instance; vk::UniqueDebugUtilsMessengerEXT debugMessenger; vk::SurfaceKHR surface{}; vk::PhysicalDevice physicalDevice{}; vk::UniqueDevice device; vk::Queue graphicsQueue{},presentQueue{}; uint32_t graphicsFamily=0,presentFamily=0;
+ vk::UniqueSwapchainKHR swapchain; std::vector<vk::Image> swapchainImages; vk::Format swapchainFormat{}; vk::Extent2D swapchainExtent{}; std::vector<vk::UniqueImageView> imageViews; vk::UniqueRenderPass renderPass; std::vector<vk::UniqueFramebuffer> framebuffers; vk::UniqueCommandPool commandPool; std::vector<vk::UniqueCommandBuffer> commandBuffers;
+ vk::UniqueBuffer vertexBuffer; vk::UniqueDeviceMemory vertexMemory; vk::UniqueShaderModule vertexShader,fragmentShader; vk::UniquePipelineLayout pipelineLayout; vk::UniquePipeline pipeline; std::array<vk::UniqueSemaphore,FRAMES> imageAvailable,renderFinished; std::array<vk::UniqueFence,FRAMES> fences; size_t currentFrame=0; bool resized=false;
+ void initWindow(){if(!glfwInit())throw std::runtime_error("GLFW initialization failed");glfwWindowHint(GLFW_CLIENT_API,GLFW_NO_API);window=glfwCreateWindow(WIDTH,HEIGHT,"GameVault Engine MVP",nullptr,nullptr);if(!window)throw std::runtime_error("GLFW window creation failed");glfwSetWindowUserPointer(window,this);glfwSetFramebufferSizeCallback(window,[](GLFWwindow*w,int,int){static_cast<VulkanApp*>(glfwGetWindowUserPointer(w))->resized=true;});}
+ void initVulkan(){createInstance();createDebugMessenger();if(glfwCreateWindowSurface(*instance,window,nullptr,reinterpret_cast<VkSurfaceKHR*>(&surface))!=VK_SUCCESS)throw std::runtime_error("Surface creation failed");pickPhysicalDevice();createDevice();createSwapchain();createImageViews();createRenderPass();createGraphicsPipeline();createFramebuffers();createCommandPool();allocateCommandBuffers();createVertexBuffer();createSyncObjects();}
+ static bool hasLayers(){auto a=vk::enumerateInstanceLayerProperties();return std::all_of(LAYERS.begin(),LAYERS.end(),[&](const char*w){return std::any_of(a.begin(),a.end(),[&](const auto&x){return std::strcmp(x.layerName,w)==0;});});}
+ void createInstance(){VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);if(VALIDATION&&!hasLayers())throw std::runtime_error("Validation layer not installed");uint32_t n=0;auto e=glfwGetRequiredInstanceExtensions(&n);if(!e)throw std::runtime_error("GLFW Vulkan extensions unavailable");std::vector<const char*> ex(e,e+n);if(VALIDATION)ex.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);vk::ApplicationInfo app("GameVault Engine MVP",1,"EliteGE",1,VK_API_VERSION_1_0);vk::InstanceCreateInfo i({},&app,VALIDATION?uint32_t(LAYERS.size()):0,VALIDATION?LAYERS.data():nullptr,uint32_t(ex.size()),ex.data());instance=vk::createInstanceUnique(i);VULKAN_HPP_DEFAULT_DISPATCHER.init(*instance);}
+ void createDebugMessenger(){if(!VALIDATION)return;vk::DebugUtilsMessengerCreateInfoEXT i({},vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning|vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral|vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation|vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance,debugCallback);debugMessenger=instance->createDebugUtilsMessengerEXTUnique(i);}
+ Families findFamilies(vk::PhysicalDevice g)const{Families f;auto p=g.getQueueFamilyProperties();for(uint32_t i=0;i<p.size();++i){if(p[i].queueFlags&vk::QueueFlagBits::eGraphics)f.graphics=i;if(g.getSurfaceSupportKHR(i,surface))f.present=i;if(f.complete())break;}return f;}
+ bool supports(vk::PhysicalDevice g)const{auto a=g.enumerateDeviceExtensionProperties();return std::all_of(EXTENSIONS.begin(),EXTENSIONS.end(),[&](const char*w){return std::any_of(a.begin(),a.end(),[&](const auto&x){return std::strcmp(x.extensionName,w)==0;});});}
+ void pickPhysicalDevice(){for(auto g:instance->enumeratePhysicalDevices())if(supports(g)&&findFamilies(g).complete()){physicalDevice=g;return;}throw std::runtime_error("No suitable Vulkan GPU found");}
+ void createDevice(){auto f=findFamilies(physicalDevice);graphicsFamily=*f.graphics;presentFamily=*f.present;std::set<uint32_t> u={graphicsFamily,presentFamily};float p=1;std::vector<vk::DeviceQueueCreateInfo> q;for(auto x:u)q.emplace_back(vk::DeviceQueueCreateFlags{},x,1,&p);vk::PhysicalDeviceFeatures features{};device=physicalDevice.createDeviceUnique({{},q,{},EXTENSIONS,&features});VULKAN_HPP_DEFAULT_DISPATCHER.init(*device);graphicsQueue=device->getQueue(graphicsFamily,0);presentQueue=device->getQueue(presentFamily,0);}
+ vk::SurfaceFormatKHR chooseFormat(const std::vector<vk::SurfaceFormatKHR>&a)const{for(auto x:a)if(x.format==vk::Format::eB8G8R8A8Srgb&&x.colorSpace==vk::ColorSpaceKHR::eSrgbNonlinear)return x;return a.front();}
+ vk::Extent2D chooseExtent(const vk::SurfaceCapabilitiesKHR&c)const{if(c.currentExtent.width!=std::numeric_limits<uint32_t>::max())return c.currentExtent;int w,h;glfwGetFramebufferSize(window,&w,&h);return {std::clamp(uint32_t(w),c.minImageExtent.width,c.maxImageExtent.width),std::clamp(uint32_t(h),c.minImageExtent.height,c.maxImageExtent.height)};}
+ void createSwapchain(){auto c=physicalDevice.getSurfaceCapabilitiesKHR(surface);auto f=chooseFormat(physicalDevice.getSurfaceFormatsKHR(surface));uint32_t count=c.minImageCount+1;if(c.maxImageCount&&count>c.maxImageCount)count=c.maxImageCount;swapchainExtent=chooseExtent(c);vk::SwapchainCreateInfoKHR i({},surface,count,f.format,f.colorSpace,swapchainExtent,1,vk::ImageUsageFlagBits::eColorAttachment);uint32_t q[]={graphicsFamily,presentFamily};if(graphicsFamily!=presentFamily)i.setImageSharingMode(vk::SharingMode::eConcurrent).setQueueFamilyIndices(q);i.setPreTransform(c.currentTransform).setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eOpaque).setPresentMode(vk::PresentModeKHR::eFifo).setClipped(true);swapchain=device->createSwapchainKHRUnique(i);swapchainImages=device->getSwapchainImagesKHR(*swapchain);swapchainFormat=f.format;}
+ void createImageViews(){for(auto image:swapchainImages)imageViews.push_back(device->createImageViewUnique({{},image,vk::ImageViewType::e2D,swapchainFormat,{},{vk::ImageAspectFlagBits::eColor,0,1,0,1}}));}
+ void createRenderPass(){vk::AttachmentDescription a({},swapchainFormat,vk::SampleCountFlagBits::e1,vk::AttachmentLoadOp::eClear,vk::AttachmentStoreOp::eStore,vk::AttachmentLoadOp::eDontCare,vk::AttachmentStoreOp::eDontCare,vk::ImageLayout::eUndefined,vk::ImageLayout::ePresentSrcKHR);vk::AttachmentReference r(0,vk::ImageLayout::eColorAttachmentOptimal);vk::SubpassDescription s({},vk::PipelineBindPoint::eGraphics,{},nullptr,1,&r);renderPass=device->createRenderPassUnique({{},1,&a,1,&s});}
+ std::vector<uint32_t> readShader(const char*name){std::ifstream file(std::string(ELITEGE_SHADER_DIR)+"/"+name,std::ios::binary|std::ios::ate);if(!file)throw std::runtime_error(std::string("Shader missing: ")+name);auto size=file.tellg();std::vector<uint32_t> code(size/4);file.seekg(0);file.read(reinterpret_cast<char*>(code.data()),size);return code;}
+ vk::UniqueShaderModule shader(const std::vector<uint32_t>&c){return device->createShaderModuleUnique({{},c});}
+ void createGraphicsPipeline(){auto v=readShader("quad.vert.spv"),f=readShader("quad.frag.spv");vertexShader=shader(v);fragmentShader=shader(f);vk::PipelineShaderStageCreateInfo stages[2]={{vk::PipelineShaderStageCreateFlags{},vk::ShaderStageFlagBits::eVertex,*vertexShader,"main"},{vk::PipelineShaderStageCreateFlags{},vk::ShaderStageFlagBits::eFragment,*fragmentShader,"main"}};vk::VertexInputBindingDescription binding(0,sizeof(Vertex),vk::VertexInputRate::eVertex);vk::VertexInputAttributeDescription attrs[]={{0,0,vk::Format::eR32G32Sfloat,offsetof(Vertex,position)},{1,0,vk::Format::eR32G32B32Sfloat,offsetof(Vertex,color)}};vk::PipelineVertexInputStateCreateInfo input({},1,&binding,2,attrs);vk::PipelineInputAssemblyStateCreateInfo assembly({},vk::PrimitiveTopology::eTriangleList,false);vk::Viewport viewport(0,0,float(swapchainExtent.width),float(swapchainExtent.height),0,1);vk::Rect2D scissor({0,0},swapchainExtent);vk::PipelineViewportStateCreateInfo view({},1,&viewport,1,&scissor);vk::PipelineRasterizationStateCreateInfo raster({},false,false,vk::PolygonMode::eFill,vk::CullModeFlagBits::eNone,vk::FrontFace::eClockwise,false,0,0,0,1);vk::PipelineMultisampleStateCreateInfo multi({},vk::SampleCountFlagBits::e1);vk::PipelineColorBlendAttachmentState blend(false,vk::BlendFactor::eOne,vk::BlendFactor::eZero,vk::BlendOp::eAdd,vk::BlendFactor::eOne,vk::BlendFactor::eZero,vk::BlendOp::eAdd,vk::ColorComponentFlags(0xF));vk::PipelineColorBlendStateCreateInfo color({},false,vk::LogicOp::eCopy,1,&blend);pipelineLayout=device->createPipelineLayoutUnique({});vk::GraphicsPipelineCreateInfo p({},2,stages,&input,&assembly,nullptr,&view,&raster,&multi,nullptr,&color,nullptr,*pipelineLayout,*renderPass);pipeline=device->createGraphicsPipelineUnique({},p).value;}
+ void createFramebuffers(){for(auto&v:imageViews){vk::ImageView h=v.get();framebuffers.push_back(device->createFramebufferUnique({{},*renderPass,1,&h,swapchainExtent.width,swapchainExtent.height,1}));}}
+ void createCommandPool(){commandPool=device->createCommandPoolUnique({vk::CommandPoolCreateFlagBits::eResetCommandBuffer,graphicsFamily});}
+ void allocateCommandBuffers(){commandBuffers=device->allocateCommandBuffersUnique({*commandPool,vk::CommandBufferLevel::ePrimary,uint32_t(FRAMES)});}
+ uint32_t memoryType(uint32_t bits,vk::MemoryPropertyFlags want){auto m=physicalDevice.getMemoryProperties();for(uint32_t i=0;i<m.memoryTypeCount;++i)if((bits&(1<<i))&&(m.memoryTypes[i].propertyFlags&want)==want)return i;throw std::runtime_error("No suitable memory type");}
+ void createVertexBuffer(){vk::BufferCreateInfo b({},sizeof(QUAD),vk::BufferUsageFlagBits::eVertexBuffer,vk::SharingMode::eExclusive);vertexBuffer=device->createBufferUnique(b);auto r=device->getBufferMemoryRequirements(*vertexBuffer);vertexMemory=device->allocateMemoryUnique({r.size,memoryType(r.memoryTypeBits,vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent)});device->bindBufferMemory(*vertexBuffer,*vertexMemory,0);void* data=device->mapMemory(*vertexMemory,0,sizeof(QUAD));std::memcpy(data,QUAD.data(),sizeof(QUAD));device->unmapMemory(*vertexMemory);}
+ void createSyncObjects(){for(size_t i=0;i<FRAMES;++i){imageAvailable[i]=device->createSemaphoreUnique({});renderFinished[i]=device->createSemaphoreUnique({});fences[i]=device->createFenceUnique({vk::FenceCreateFlagBits::eSignaled});}}
+ void recreateSwapchain(){int w=0,h=0;glfwGetFramebufferSize(window,&w,&h);while((w==0||h==0)&&!glfwWindowShouldClose(window)){glfwGetFramebufferSize(window,&w,&h);glfwWaitEvents();}if(glfwWindowShouldClose(window))return;device->waitIdle();framebuffers.clear();imageViews.clear();swapchain.reset();createSwapchain();createImageViews();createFramebuffers();}
+ void drawFrame(){vk::Fence fence=fences[currentFrame].get();device->waitForFences(1,&fence,VK_TRUE,UINT64_MAX);uint32_t index=0;vk::Result result;try{auto a=device->acquireNextImageKHR(*swapchain,UINT64_MAX,*imageAvailable[currentFrame],{});result=a.result;index=a.value;}catch(const vk::OutOfDateKHRError&){recreateSwapchain();return;}if(result==vk::Result::eSuboptimalKHR||resized){resized=false;recreateSwapchain();return;}device->resetFences(1,&fence);auto&cmd=commandBuffers[currentFrame];cmd->reset();vk::CommandBufferBeginInfo begin{};cmd->begin(begin);vk::ClearValue clear(std::array<float,4>{0.02f,0.04f,0.14f,1});vk::RenderPassBeginInfo pass(*renderPass,*framebuffers[index],{{0,0},swapchainExtent},1,&clear);cmd->beginRenderPass(pass,vk::SubpassContents::eInline);cmd->bindPipeline(vk::PipelineBindPoint::eGraphics,*pipeline);vk::DeviceSize offset=0;vk::Buffer buffer=vertexBuffer.get();cmd->bindVertexBuffers(0,1,&buffer,&offset);cmd->draw(uint32_t(QUAD.size()),1,0,0);cmd->endRenderPass();cmd->end();vk::PipelineStageFlags wait=vk::PipelineStageFlagBits::eColorAttachmentOutput;vk::Semaphore available=imageAvailable[currentFrame].get(),finished=renderFinished[currentFrame].get();vk::CommandBuffer command=cmd.get();vk::SwapchainKHR chain=swapchain.get();vk::SubmitInfo submit(1,&available,&wait,1,&command,1,&finished);graphicsQueue.submit(submit,*fences[currentFrame]);vk::PresentInfoKHR present(1,&finished,1,&chain,&index);try{result=presentQueue.presentKHR(present);}catch(const vk::OutOfDateKHRError&){result=vk::Result::eErrorOutOfDateKHR;}if(result==vk::Result::eErrorOutOfDateKHR||result==vk::Result::eSuboptimalKHR||resized){resized=false;recreateSwapchain();}currentFrame=(currentFrame+1)%FRAMES;}
+ void mainLoop(){while(!glfwWindowShouldClose(window)){glfwPollEvents();if(glfwGetKey(window,GLFW_KEY_ESCAPE)==GLFW_PRESS)glfwSetWindowShouldClose(window,GLFW_TRUE);drawFrame();}}
+ void cleanup(){if(device)device->waitIdle();for(auto&s:imageAvailable)s.reset();for(auto&s:renderFinished)s.reset();for(auto&f:fences)f.reset();commandBuffers.clear();commandPool.reset();pipeline.reset();pipelineLayout.reset();vertexShader.reset();fragmentShader.reset();vertexBuffer.reset();vertexMemory.reset();framebuffers.clear();renderPass.reset();imageViews.clear();swapchain.reset();device.reset();if(instance&&surface)instance->destroySurfaceKHR(surface);debugMessenger.reset();instance.reset();if(window)glfwDestroyWindow(window);glfwTerminate();}
 };
-
-int main() {
-    try { VulkanApp{}.run(); }
-    catch (const std::exception& error) {
-        std::cerr << "Critical Error: " << error.what() << '\n';
-        return EXIT_FAILURE;
-    }
-    return EXIT_SUCCESS;
-}
+int main(){try{VulkanApp{}.run();}catch(const std::exception&e){std::cerr<<"Critical Error: "<<e.what()<<'\n';return EXIT_FAILURE;}return EXIT_SUCCESS;}
