@@ -17,7 +17,7 @@ FetchContent_Declare(glfw
     GIT_SHALLOW TRUE)
 FetchContent_Declare(glm
     GIT_REPOSITORY https://github.com/g-truc/glm.git
-    GIT_TAG 0.9.9.8
+    GIT_TAG 1.0.1
     GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(glfw glm)
 
