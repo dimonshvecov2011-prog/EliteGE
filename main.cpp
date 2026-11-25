@@ -309,7 +309,7 @@ private:
         command->reset();
         vk::CommandBufferBeginInfo beginInfo{};
         command->begin(beginInfo);
-        glm::vec4 color(0.1f, 0.1f, 0.2f, 1.0f);
+        glm::vec4 color(0.02f, 0.04f, 0.14f, 1.0f);
         vk::ClearValue clear(std::array<float, 4>{color.r, color.g, color.b, color.a});
         vk::RenderPassBeginInfo pass(*renderPass, *framebuffers[imageIndex], {{0, 0}, swapchainExtent}, 1, &clear);
         command->beginRenderPass(pass, vk::SubpassContents::eInline); command->endRenderPass(); command->end();
