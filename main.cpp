@@ -219,24 +219,51 @@ class VulkanApp {
             });
         });
     }
+    static int deviceTypePriority(vk::PhysicalDeviceType type) {
+        switch (type) {
+            case vk::PhysicalDeviceType::eDiscreteGpu:
+                return 4;
+            case vk::PhysicalDeviceType::eIntegratedGpu:
+                return 3;
+            case vk::PhysicalDeviceType::eVirtualGpu:
+                return 2;
+            case vk::PhysicalDeviceType::eCpu:
+                return 1;
+            default:
+                return 0;
+        }
+    }
+    static vk::DeviceSize deviceLocalMemory(vk::PhysicalDevice gpu) {
+        vk::DeviceSize total = 0;
+        auto memory = gpu.getMemoryProperties();
+        for (uint32_t i = 0; i < memory.memoryHeapCount; ++i) {
+            if (memory.memoryHeaps[i].flags & vk::MemoryHeapFlagBits::eDeviceLocal)
+                total += memory.memoryHeaps[i].size;
+        }
+        return total;
+    }
     void pickPhysicalDevice() {
-        uint64_t bestScore = 0;
+        int bestTypePriority = -1;
+        vk::DeviceSize bestLocalMemory = 0;
         bool found = false;
         for (auto gpu : instance->enumeratePhysicalDevices()) {
             if (supports(gpu) && findFamilies(gpu).complete()) {
                 auto properties = gpu.getProperties();
-                uint64_t score = properties.limits.maxImageDimension2D;
-                if (properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu)
-                    score += 1000000;
-                if (!found || score > bestScore) {
+                int typePriority = deviceTypePriority(properties.deviceType);
+                vk::DeviceSize localMemory = deviceLocalMemory(gpu);
+                if (!found || typePriority > bestTypePriority ||
+                    (typePriority == bestTypePriority && localMemory > bestLocalMemory)) {
                     physicalDevice = gpu;
-                    bestScore = score;
+                    bestTypePriority = typePriority;
+                    bestLocalMemory = localMemory;
                     found = true;
                 }
             }
         }
         if (!found)
             throw std::runtime_error("No suitable Vulkan GPU found");
+        auto selected = physicalDevice.getProperties();
+        std::cerr << "Selected GPU: " << selected.deviceName << '\n';
     }
     void createDevice() {
         auto families = findFamilies(physicalDevice);
