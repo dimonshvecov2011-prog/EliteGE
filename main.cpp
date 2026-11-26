@@ -170,6 +170,8 @@ class VulkanApp {
     void createInstance() {
         VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
         validationEnabled = VALIDATION && hasLayers();
+        if (VALIDATION && !validationEnabled)
+            std::cerr << "Validation layer not found, continuing without it\n";
         uint32_t count = 0;
         auto required = glfwGetRequiredInstanceExtensions(&count);
         if (!required)
