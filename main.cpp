@@ -78,16 +78,41 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE namespace {
             return result;
         }
     };
+    struct Scene {
+        std::vector<SpriteObject> objects;
+        Scene() {
+            createSceneObjects();
+        }
+        void update() {
+            std::stable_sort(objects.begin(), objects.end(), [](const SpriteObject& lhs, const SpriteObject& rhs) {
+                if (lhs.transform.layer != rhs.transform.layer)
+                    return lhs.transform.layer < rhs.transform.layer;
+                if (lhs.transform.position.y != rhs.transform.position.y)
+                    return lhs.transform.position.y > rhs.transform.position.y;
+                return lhs.id < rhs.id;
+            });
+        }
+
+       private:
+        static SpriteObject makeSprite(uint32_t id, glm::vec2 position, glm::vec2 scale, float rotation, int layer) {
+            return SpriteObject{id, Transform2D{position, scale, rotation, layer}};
+        }
+        void createSceneObjects() {
+            objects = {makeSprite(0, {-0.18f, 0.18f}, {0.55f, 0.55f}, 0.0f, 0),
+                       makeSprite(1, {0.0f, 0.0f}, {0.55f, 0.55f}, 0.0f, 0),
+                       makeSprite(2, {0.18f, -0.18f}, {0.55f, 0.55f}, 0.0f, 0)};
+        }
+    };
 }
 class VulkanApp {
    public:
     ~VulkanApp() {
         cleanup();
     }
-    void run() {
+    void run(Scene& scene) {
         initWindow();
         initVulkan();
-        mainLoop();
+        mainLoop(scene);
     }
 
    private:
@@ -133,7 +158,6 @@ class VulkanApp {
     std::vector<vk::UniqueSemaphore> renderFinished;
     std::array<vk::UniqueFence, FRAMES> fences;
     Camera2D camera;
-    std::vector<SpriteObject> objects;
     size_t currentFrame = 0;
     bool resized = false;
     bool validationEnabled = false;
@@ -169,7 +193,6 @@ class VulkanApp {
         createFramebuffers();
         allocateCommandBuffers();
         createVertexBuffer();
-        createSceneObjects();
         createSyncObjects();
     }
     static bool hasLayers() {
@@ -582,26 +605,6 @@ class VulkanApp {
         std::memcpy(mapped, QUAD.data(), sizeof(QUAD));
         device->unmapMemory(*vertexMemory);
     }
-    static SpriteObject makeSprite(uint32_t id, glm::vec2 position, glm::vec2 scale, float rotation, int layer) {
-        return SpriteObject{id, Transform2D{position, scale, rotation, layer}};
-    }
-    void createSceneObjects() {
-        objects = {makeSprite(0, {-0.18f, 0.18f}, {0.55f, 0.55f}, 0.0f, 0),
-                   makeSprite(1, {0.0f, 0.0f}, {0.55f, 0.55f}, 0.0f, 0),
-                   makeSprite(2, {0.18f, -0.18f}, {0.55f, 0.55f}, 0.0f, 0)};
-    }
-    void sortObjects() {
-        std::stable_sort(objects.begin(), objects.end(), [](const SpriteObject& lhs, const SpriteObject& rhs) {
-            if (lhs.transform.layer != rhs.transform.layer)
-                return lhs.transform.layer < rhs.transform.layer;
-            if (lhs.transform.position.y != rhs.transform.position.y)
-                return lhs.transform.position.y > rhs.transform.position.y;
-            return lhs.id < rhs.id;
-        });
-    }
-    void updateScene() {
-        sortObjects();
-    }
     static glm::mat4 modelMatrix(const Transform2D& transform) {
         glm::mat4 model(1.0f);
         model = glm::translate(model, glm::vec3(transform.position, 0.0f));
@@ -642,7 +645,7 @@ class VulkanApp {
         updateCamera();
         resized = false;
     }
-    void drawFrame() {
+    void drawFrame(const std::vector<SpriteObject>& objects) {
         vk::Fence fence = fences[currentFrame].get();
         (void)device->waitForFences(1, &fence, VK_TRUE, UINT64_MAX);
         uint32_t imageIndex = 0;
@@ -697,13 +700,13 @@ class VulkanApp {
             recreateSwapchain();
         currentFrame = (currentFrame + 1) % FRAMES;
     }
-    void mainLoop() {
+    void mainLoop(Scene& scene) {
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
             if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
                 glfwSetWindowShouldClose(window, GLFW_TRUE);
-            updateScene();
-            drawFrame();
+            scene.update();
+            drawFrame(scene.objects);
         }
     }
     void cleanup() {
@@ -767,7 +770,8 @@ class VulkanApp {
 };
 int main() {
     try {
-        VulkanApp{}.run();
+        Scene scene;
+        VulkanApp{}.run(scene);
     } catch (const std::exception& error) {
         std::cerr << "Critical Error: " << error.what() << '\n';
         return EXIT_FAILURE;
