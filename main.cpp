@@ -71,11 +71,13 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE namespace {
 }
 class VulkanApp {
    public:
+    ~VulkanApp() {
+        cleanup();
+    }
     void run() {
         initWindow();
         initVulkan();
         mainLoop();
-        cleanup();
     }
 
    private:
@@ -649,15 +651,18 @@ class VulkanApp {
         vertexMemory.reset();
         descriptorPool.reset();
         descriptorLayout.reset();
-        for (size_t i = 0; i < FRAMES; ++i) {
-            if (uniformBuffers[i] != VK_NULL_HANDLE)
-                vmaDestroyBuffer(allocator, uniformBuffers[i], uniformAllocations[i]);
-            uniformBuffers[i] = VK_NULL_HANDLE;
-            uniformAllocations[i] = VK_NULL_HANDLE;
-        }
         if (allocator != VK_NULL_HANDLE) {
+            for (size_t i = 0; i < FRAMES; ++i) {
+                if (uniformBuffers[i] != VK_NULL_HANDLE)
+                    vmaDestroyBuffer(allocator, uniformBuffers[i], uniformAllocations[i]);
+                uniformBuffers[i] = VK_NULL_HANDLE;
+                uniformAllocations[i] = VK_NULL_HANDLE;
+            }
             vmaDestroyAllocator(allocator);
             allocator = VK_NULL_HANDLE;
+        } else {
+            uniformBuffers.fill(VK_NULL_HANDLE);
+            uniformAllocations.fill(VK_NULL_HANDLE);
         }
         textureSampler.reset();
         textureView.reset();
