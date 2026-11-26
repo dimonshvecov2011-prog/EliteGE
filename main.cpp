@@ -120,11 +120,12 @@ class VulkanApp {
     Camera2D camera;
     size_t currentFrame = 0;
     bool resized = false;
+    bool validationEnabled = false;
     void initWindow() {
         if (!glfwInit())
             throw std::runtime_error("GLFW initialization failed");
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        window = glfwCreateWindow(WIDTH, HEIGHT, "GameVault Engine MVP", nullptr, nullptr);
+        window = glfwCreateWindow(WIDTH, HEIGHT, "EliteGE Engine", nullptr, nullptr);
         if (!window)
             throw std::runtime_error("GLFW window creation failed");
         glfwSetWindowUserPointer(window, this);
@@ -162,24 +163,23 @@ class VulkanApp {
     }
     void createInstance() {
         VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
-        if (VALIDATION && !hasLayers())
-            throw std::runtime_error("Validation layer not installed");
+        validationEnabled = VALIDATION && hasLayers();
         uint32_t count = 0;
         auto required = glfwGetRequiredInstanceExtensions(&count);
         if (!required)
             throw std::runtime_error("GLFW Vulkan extensions unavailable");
         std::vector<const char*> extensions(required, required + count);
-        if (VALIDATION)
+        if (validationEnabled)
             extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-        vk::ApplicationInfo app("GameVault Engine MVP", 1, "EliteGE", 1, VK_API_VERSION_1_0);
-        vk::InstanceCreateInfo info({}, &app, VALIDATION ? uint32_t(LAYERS.size()) : 0,
-                                    VALIDATION ? LAYERS.data() : nullptr, uint32_t(extensions.size()),
+        vk::ApplicationInfo app("EliteGE Engine", 1, "EliteGE", 1, VK_API_VERSION_1_0);
+        vk::InstanceCreateInfo info({}, &app, validationEnabled ? uint32_t(LAYERS.size()) : 0,
+                                    validationEnabled ? LAYERS.data() : nullptr, uint32_t(extensions.size()),
                                     extensions.data());
         instance = vk::createInstanceUnique(info);
         VULKAN_HPP_DEFAULT_DISPATCHER.init(*instance);
     }
     void createDebugMessenger() {
-        if (!VALIDATION)
+        if (!validationEnabled)
             return;
         vk::DebugUtilsMessengerCreateInfoEXT info{};
         info.messageSeverity =
@@ -212,13 +212,23 @@ class VulkanApp {
         });
     }
     void pickPhysicalDevice() {
+        uint64_t bestScore = 0;
+        bool found = false;
         for (auto gpu : instance->enumeratePhysicalDevices()) {
             if (supports(gpu) && findFamilies(gpu).complete()) {
-                physicalDevice = gpu;
-                return;
+                auto properties = gpu.getProperties();
+                uint64_t score = properties.limits.maxImageDimension2D;
+                if (properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu)
+                    score += 1000000;
+                if (!found || score > bestScore) {
+                    physicalDevice = gpu;
+                    bestScore = score;
+                    found = true;
+                }
             }
         }
-        throw std::runtime_error("No suitable Vulkan GPU found");
+        if (!found)
+            throw std::runtime_error("No suitable Vulkan GPU found");
     }
     void createDevice() {
         auto families = findFamilies(physicalDevice);
