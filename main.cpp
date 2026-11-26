@@ -112,7 +112,7 @@ class VulkanApp { public:
                                vk::DebugUtilsMessageSeverityFlagBitsEXT::eError;
         info.messageType = vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
                            vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |                            vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance;
-        info.pfnUserCallback = debugCallback;
+        info.pfnUserCallback = reinterpret_cast<PFN_vkDebugUtilsMessengerCallbackEXT>(debugCallback);
         debugMessenger = instance->createDebugUtilsMessengerEXTUnique(info);
     }     Families findFamilies(vk::PhysicalDevice gpu) const {
         Families families;
