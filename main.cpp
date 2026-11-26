@@ -130,10 +130,6 @@ class VulkanApp {
     vk::Format swapchainFormat{};
     vk::Extent2D swapchainExtent{};
     std::vector<vk::UniqueImageView> imageViews;
-    vk::Format depthFormat{};
-    vk::UniqueImage depthImage;
-    vk::UniqueDeviceMemory depthMemory;
-    vk::UniqueImageView depthView;
     vk::UniqueRenderPass renderPass;
     std::vector<vk::UniqueFramebuffer> framebuffers;
     vk::UniqueCommandPool commandPool;
@@ -184,7 +180,6 @@ class VulkanApp {
         createAllocator();
         createSwapchain();
         createImageViews();
-        createDepthResources();
         createCommandPool();
         createTextureResources();
         createCameraResources();
@@ -366,34 +361,15 @@ class VulkanApp {
                                                                 {},
                                                                 {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}}));
     }
-    void createDepthResources() {
-        depthFormat = vk::Format::eD32Sfloat;
-        vk::ImageCreateInfo info({}, vk::ImageType::e2D, depthFormat,
-                                 {swapchainExtent.width, swapchainExtent.height, 1}, 1, 1, vk::SampleCountFlagBits::e1,
-                                 vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eDepthStencilAttachment);
-        depthImage = device->createImageUnique(info);
-        auto requirements = device->getImageMemoryRequirements(*depthImage);
-        depthMemory = device->allocateMemoryUnique(
-            {requirements.size, memoryType(requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal)});
-        device->bindImageMemory(*depthImage, *depthMemory, 0);
-        depthView = device->createImageViewUnique(
-            {{}, *depthImage, vk::ImageViewType::e2D, depthFormat, {}, {vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1}});
-    }
     void createRenderPass() {
         vk::AttachmentDescription color({}, swapchainFormat, vk::SampleCountFlagBits::e1, vk::AttachmentLoadOp::eClear,
                                         vk::AttachmentStoreOp::eStore, vk::AttachmentLoadOp::eDontCare,
                                         vk::AttachmentStoreOp::eDontCare, vk::ImageLayout::eUndefined,
                                         vk::ImageLayout::ePresentSrcKHR);
-        vk::AttachmentDescription depth({}, depthFormat, vk::SampleCountFlagBits::e1, vk::AttachmentLoadOp::eClear,
-                                        vk::AttachmentStoreOp::eDontCare, vk::AttachmentLoadOp::eDontCare,
-                                        vk::AttachmentStoreOp::eDontCare, vk::ImageLayout::eUndefined,
-                                        vk::ImageLayout::eDepthStencilAttachmentOptimal);
-        vk::AttachmentDescription attachments[] = {color, depth};
+        vk::AttachmentDescription attachments[] = {color};
         vk::AttachmentReference colorRef(0, vk::ImageLayout::eColorAttachmentOptimal);
-        vk::AttachmentReference depthRef(1, vk::ImageLayout::eDepthStencilAttachmentOptimal);
-        vk::SubpassDescription subpass({}, vk::PipelineBindPoint::eGraphics, {}, nullptr, 1, &colorRef, nullptr,
-                                       &depthRef);
-        renderPass = device->createRenderPassUnique({{}, 2, attachments, 1, &subpass});
+        vk::SubpassDescription subpass({}, vk::PipelineBindPoint::eGraphics, {}, nullptr, 1, &colorRef);
+        renderPass = device->createRenderPassUnique({{}, 1, attachments, 1, &subpass});
     }
     std::vector<uint32_t> readShader(const char* name) {
         std::ifstream file(std::string(ELITEGE_SHADER_DIR) + "/" + name, std::ios::binary | std::ios::ate);
@@ -559,22 +535,20 @@ class VulkanApp {
             true, vk::BlendFactor::eSrcAlpha, vk::BlendFactor::eOneMinusSrcAlpha, vk::BlendOp::eAdd,
             vk::BlendFactor::eOne, vk::BlendFactor::eOneMinusSrcAlpha, vk::BlendOp::eAdd, vk::ColorComponentFlags(0xF));
         vk::PipelineColorBlendStateCreateInfo color({}, false, vk::LogicOp::eCopy, 1, &blend);
-        vk::PipelineDepthStencilStateCreateInfo depth{};
-        depth.setDepthTestEnable(false).setDepthWriteEnable(false);
         vk::DescriptorSetLayout layout = descriptorLayout.get();
         vk::PushConstantRange objectRange(vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4));
         pipelineLayout = device->createPipelineLayoutUnique({{}, 1, &layout, 1, &objectRange});
         vk::DynamicState dynamicStates[] = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
         vk::PipelineDynamicStateCreateInfo dynamic({}, 2, dynamicStates);
         vk::GraphicsPipelineCreateInfo info({}, 2, stages, &input, &assembly, nullptr, &viewportState, &raster,
-                                            &multisample, &depth, &color, &dynamic, *pipelineLayout, *renderPass);
+                                            &multisample, nullptr, &color, &dynamic, *pipelineLayout, *renderPass);
         pipeline = device->createGraphicsPipelineUnique({}, info).value;
     }
     void createFramebuffers() {
         for (auto& view : imageViews) {
-            vk::ImageView attachments[] = {view.get(), depthView.get()};
+            vk::ImageView attachments[] = {view.get()};
             framebuffers.push_back(device->createFramebufferUnique(
-                {{}, *renderPass, 2, attachments, swapchainExtent.width, swapchainExtent.height, 1}));
+                {{}, *renderPass, 1, attachments, swapchainExtent.width, swapchainExtent.height, 1}));
         }
     }
     void createCommandPool() {
@@ -632,14 +606,10 @@ class VulkanApp {
         device->waitIdle();
         framebuffers.clear();
         imageViews.clear();
-        depthView.reset();
-        depthImage.reset();
-        depthMemory.reset();
         renderFinished.clear();
         swapchain.reset();
         createSwapchain();
         createImageViews();
-        createDepthResources();
         createFramebuffers();
         for (size_t i = 0; i < swapchainImages.size(); ++i) renderFinished.push_back(device->createSemaphoreUnique({}));
         updateCamera();
@@ -664,8 +634,7 @@ class VulkanApp {
         command->reset();
         vk::CommandBufferBeginInfo beginInfo{};
         (void)command->begin(beginInfo);
-        std::array<vk::ClearValue, 2> clears = {vk::ClearValue(std::array<float, 4>{0.02f, 0.04f, 0.14f, 1.0f}),
-                                                vk::ClearValue(vk::ClearDepthStencilValue(1.0f, 0))};
+        std::array<vk::ClearValue, 1> clears = {vk::ClearValue(std::array<float, 4>{0.02f, 0.04f, 0.14f, 1.0f})};
         vk::RenderPassBeginInfo pass(*renderPass, *framebuffers[imageIndex], {{0, 0}, swapchainExtent},
                                      uint32_t(clears.size()), clears.data());
         command->beginRenderPass(pass, vk::SubpassContents::eInline);
@@ -726,9 +695,6 @@ class VulkanApp {
         commandPool.reset();
         pipeline.reset();
         pipelineLayout.reset();
-        depthView.reset();
-        depthImage.reset();
-        depthMemory.reset();
         vertexShader.reset();
         fragmentShader.reset();
         vertexBuffer.reset();
