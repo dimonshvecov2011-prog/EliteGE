@@ -707,8 +707,15 @@ class VulkanApp {
         }
     }
     void cleanup() {
-        if (device)
-            device->waitIdle();
+        if (device) {
+            try {
+                (void)device->waitIdle();
+            } catch (const std::exception& error) {
+                std::cerr << "Cleanup waitIdle failed: " << error.what() << '\n';
+            } catch (...) {
+                std::cerr << "Cleanup waitIdle failed with an unknown error\n";
+            }
+        }
         for (auto& semaphore : imageAvailable) semaphore.reset();
         renderFinished.clear();
         for (auto& fence : fences) fence.reset();
