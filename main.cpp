@@ -599,6 +599,9 @@ class VulkanApp {
             return lhs.id < rhs.id;
         });
     }
+    void updateScene() {
+        sortObjects();
+    }
     static glm::mat4 modelMatrix(const Transform2D& transform) {
         glm::mat4 model(1.0f);
         model = glm::translate(model, glm::vec3(transform.position, 0.0f));
@@ -671,7 +674,6 @@ class VulkanApp {
         vk::DeviceSize offset = 0;
         vk::Buffer buffer = vertexBuffer.get();
         command->bindVertexBuffers(0, 1, &buffer, &offset);
-        sortObjects();
         for (const auto& object : objects) {
             glm::mat4 model = modelMatrix(object.transform);
             command->pushConstants(*pipelineLayout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(model), &model);
@@ -700,6 +702,7 @@ class VulkanApp {
             glfwPollEvents();
             if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
                 glfwSetWindowShouldClose(window, GLFW_TRUE);
+            updateScene();
             drawFrame();
         }
     }
