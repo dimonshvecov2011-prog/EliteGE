@@ -13,6 +13,8 @@
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #include <vulkan/vulkan.hpp>
+#define VMA_IMPLEMENTATION
+#include <vk_mem_alloc.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -83,6 +85,7 @@ class VulkanApp {
     vk::SurfaceKHR surface{};
     vk::PhysicalDevice physicalDevice{};
     vk::UniqueDevice device;
+    VmaAllocator allocator = VK_NULL_HANDLE;
     vk::Queue graphicsQueue{}, presentQueue{};
     uint32_t graphicsFamily = 0, presentFamily = 0;
     vk::UniqueSwapchainKHR swapchain;
@@ -106,8 +109,8 @@ class VulkanApp {
     vk::UniqueDeviceMemory textureMemory;
     vk::UniqueImageView textureView;
     vk::UniqueSampler textureSampler;
-    vk::UniqueBuffer uniformBuffer;
-    vk::UniqueDeviceMemory uniformMemory;
+    std::array<VkBuffer, FRAMES> uniformBuffers{};
+    std::array<VmaAllocation, FRAMES> uniformAllocations{};
     vk::UniqueDescriptorSetLayout descriptorLayout;
     vk::UniqueDescriptorPool descriptorPool;
     std::array<vk::DescriptorSet, FRAMES> descriptorSets{};
@@ -141,6 +144,7 @@ class VulkanApp {
             throw std::runtime_error("Surface creation failed");
         pickPhysicalDevice();
         createDevice();
+        createAllocator();
         createSwapchain();
         createImageViews();
         createDepthResources();
@@ -243,6 +247,15 @@ class VulkanApp {
         VULKAN_HPP_DEFAULT_DISPATCHER.init(*device);
         graphicsQueue = device->getQueue(graphicsFamily, 0);
         presentQueue = device->getQueue(presentFamily, 0);
+    }
+    void createAllocator() {
+        VmaAllocatorCreateInfo info{};
+        info.physicalDevice = static_cast<VkPhysicalDevice>(physicalDevice);
+        info.device = static_cast<VkDevice>(*device);
+        info.instance = static_cast<VkInstance>(*instance);
+        info.vulkanApiVersion = VK_API_VERSION_1_0;
+        if (vmaCreateAllocator(&info, &allocator) != VK_SUCCESS)
+            throw std::runtime_error("VMA allocator creation failed");
     }
     vk::SurfaceFormatKHR chooseFormat(const std::vector<vk::SurfaceFormatKHR>& formats) const {
         for (auto format : formats)
@@ -412,19 +425,29 @@ class VulkanApp {
     }
     void updateCamera() {
         glm::mat4 projection = camera.projection(swapchainExtent.width, swapchainExtent.height);
-        void* mapped = device->mapMemory(*uniformMemory, 0, sizeof(projection));
-        std::memcpy(mapped, &projection, sizeof(projection));
-        device->unmapMemory(*uniformMemory);
+        for (size_t i = 0; i < FRAMES; ++i) {
+            void* mapped = nullptr;
+            if (vmaMapMemory(allocator, uniformAllocations[i], &mapped) != VK_SUCCESS)
+                throw std::runtime_error("Could not map camera uniform buffer");
+            std::memcpy(mapped, &projection, sizeof(projection));
+            vmaUnmapMemory(allocator, uniformAllocations[i]);
+            vmaFlushAllocation(allocator, uniformAllocations[i], 0, sizeof(projection));
+        }
     }
     void createCameraResources() {
-        uniformBuffer = device->createBufferUnique(
-            {{}, sizeof(glm::mat4), vk::BufferUsageFlagBits::eUniformBuffer, vk::SharingMode::eExclusive});
-        auto requirements = device->getBufferMemoryRequirements(*uniformBuffer);
-        uniformMemory = device->allocateMemoryUnique(
-            {requirements.size,
-             memoryType(requirements.memoryTypeBits,
-                        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)});
-        device->bindBufferMemory(*uniformBuffer, *uniformMemory, 0);
+        VkBufferCreateInfo bufferInfo{};
+        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferInfo.size = sizeof(glm::mat4);
+        bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VmaAllocationCreateInfo allocationInfo{};
+        allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+        allocationInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+        for (size_t i = 0; i < FRAMES; ++i) {
+            if (vmaCreateBuffer(allocator, &bufferInfo, &allocationInfo, &uniformBuffers[i], &uniformAllocations[i],
+                                nullptr) != VK_SUCCESS)
+                throw std::runtime_error("Could not create camera uniform buffer");
+        }
         vk::DescriptorSetLayoutBinding bindings[] = {
             vk::DescriptorSetLayoutBinding(0, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex),
             vk::DescriptorSetLayoutBinding(1, vk::DescriptorType::eCombinedImageSampler, 1,
@@ -438,10 +461,10 @@ class VulkanApp {
         auto sets = device->allocateDescriptorSets({*descriptorPool, layouts});
         for (size_t i = 0; i < FRAMES; ++i) {
             descriptorSets[i] = sets[i];
-            vk::DescriptorBufferInfo bufferInfo(*uniformBuffer, 0, sizeof(glm::mat4));
+            vk::DescriptorBufferInfo uniformInfo(vk::Buffer(uniformBuffers[i]), 0, sizeof(glm::mat4));
             vk::DescriptorImageInfo imageInfo(*textureSampler, *textureView, vk::ImageLayout::eShaderReadOnlyOptimal);
             vk::WriteDescriptorSet writes[] = {
-                {descriptorSets[i], 0, 0, 1, vk::DescriptorType::eUniformBuffer, nullptr, &bufferInfo},
+                {descriptorSets[i], 0, 0, 1, vk::DescriptorType::eUniformBuffer, nullptr, &uniformInfo},
                 {descriptorSets[i], 1, 0, 1, vk::DescriptorType::eCombinedImageSampler, &imageInfo}};
             device->updateDescriptorSets(2, writes, 0, nullptr);
         }
@@ -624,10 +647,18 @@ class VulkanApp {
         fragmentShader.reset();
         vertexBuffer.reset();
         vertexMemory.reset();
-        uniformBuffer.reset();
-        uniformMemory.reset();
         descriptorPool.reset();
         descriptorLayout.reset();
+        for (size_t i = 0; i < FRAMES; ++i) {
+            if (uniformBuffers[i] != VK_NULL_HANDLE)
+                vmaDestroyBuffer(allocator, uniformBuffers[i], uniformAllocations[i]);
+            uniformBuffers[i] = VK_NULL_HANDLE;
+            uniformAllocations[i] = VK_NULL_HANDLE;
+        }
+        if (allocator != VK_NULL_HANDLE) {
+            vmaDestroyAllocator(allocator);
+            allocator = VK_NULL_HANDLE;
+        }
         textureSampler.reset();
         textureView.reset();
         textureImage.reset();
