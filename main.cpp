@@ -48,6 +48,15 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE namespace {
         float color[3];
         float uv[2];
     };
+    struct Transform2D {
+        glm::vec2 position{0.0f};
+        glm::vec2 scale{1.0f};
+        float rotation = 0.0f;
+        float layer = 0.0f;
+    };
+    struct SpriteObject {
+        Transform2D transform;
+    };
     const std::array<Vertex, 6> QUAD = {
         Vertex{{-0.55f, -0.55f}, {1, 1, 1}, {0, 1}}, Vertex{{0.55f, -0.55f}, {1, 1, 1}, {1, 1}},
         Vertex{{0.55f, 0.55f}, {1, 1, 1}, {1, 0}},   Vertex{{-0.55f, -0.55f}, {1, 1, 1}, {0, 1}},
@@ -123,6 +132,7 @@ class VulkanApp {
     std::vector<vk::UniqueSemaphore> renderFinished;
     std::array<vk::UniqueFence, FRAMES> fences;
     Camera2D camera;
+    std::vector<SpriteObject> objects;
     size_t currentFrame = 0;
     bool resized = false;
     bool validationEnabled = false;
@@ -158,6 +168,7 @@ class VulkanApp {
         createFramebuffers();
         allocateCommandBuffers();
         createVertexBuffer();
+        createSceneObjects();
         createSyncObjects();
     }
     static bool hasLayers() {
@@ -527,7 +538,8 @@ class VulkanApp {
         vk::PipelineDepthStencilStateCreateInfo depth{};
         depth.setDepthTestEnable(false).setDepthWriteEnable(false);
         vk::DescriptorSetLayout layout = descriptorLayout.get();
-        pipelineLayout = device->createPipelineLayoutUnique({{}, 1, &layout});
+        vk::PushConstantRange objectRange(vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4));
+        pipelineLayout = device->createPipelineLayoutUnique({{}, 1, &layout, 1, &objectRange});
         vk::DynamicState dynamicStates[] = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
         vk::PipelineDynamicStateCreateInfo dynamic({}, 2, dynamicStates);
         vk::GraphicsPipelineCreateInfo info({}, 2, stages, &input, &assembly, nullptr, &viewportState, &raster,
@@ -568,6 +580,28 @@ class VulkanApp {
         void* mapped = device->mapMemory(*vertexMemory, 0, sizeof(QUAD));
         std::memcpy(mapped, QUAD.data(), sizeof(QUAD));
         device->unmapMemory(*vertexMemory);
+    }
+    static SpriteObject makeSprite(glm::vec2 position, glm::vec2 scale, float rotation, float layer) {
+        return SpriteObject{Transform2D{position, scale, rotation, layer}};
+    }
+    void createSceneObjects() {
+        objects = {makeSprite({-0.65f, 0.15f}, {0.42f, 0.42f}, 0.0f, 0.0f),
+                   makeSprite({0.0f, -0.1f}, {0.58f, 0.58f}, glm::radians(12.0f), 1.0f),
+                   makeSprite({0.65f, 0.15f}, {0.42f, 0.42f}, glm::radians(-12.0f), 0.0f)};
+    }
+    void sortObjects() {
+        std::sort(objects.begin(), objects.end(), [](const SpriteObject& lhs, const SpriteObject& rhs) {
+            if (lhs.transform.layer != rhs.transform.layer)
+                return lhs.transform.layer < rhs.transform.layer;
+            return lhs.transform.position.y < rhs.transform.position.y;
+        });
+    }
+    static glm::mat4 modelMatrix(const Transform2D& transform) {
+        glm::mat4 model(1.0f);
+        model = glm::translate(model, glm::vec3(transform.position, 0.0f));
+        model = glm::rotate(model, transform.rotation, glm::vec3(0.0f, 0.0f, 1.0f));
+        model = glm::scale(model, glm::vec3(transform.scale, 1.0f));
+        return model;
     }
     void createSyncObjects() {
         for (size_t i = 0; i < FRAMES; ++i) {
@@ -634,7 +668,12 @@ class VulkanApp {
         vk::DeviceSize offset = 0;
         vk::Buffer buffer = vertexBuffer.get();
         command->bindVertexBuffers(0, 1, &buffer, &offset);
-        command->draw(uint32_t(QUAD.size()), 1, 0, 0);
+        sortObjects();
+        for (const auto& object : objects) {
+            glm::mat4 model = modelMatrix(object.transform);
+            command->pushConstants(*pipelineLayout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(model), &model);
+            command->draw(uint32_t(QUAD.size()), 1, 0, 0);
+        }
         command->endRenderPass();
         command->end();
         vk::PipelineStageFlags waitStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
