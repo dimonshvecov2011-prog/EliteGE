@@ -52,9 +52,10 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE namespace {
         glm::vec2 position{0.0f};
         glm::vec2 scale{1.0f};
         float rotation = 0.0f;
-        float layer = 0.0f;
+        int layer = 0;
     };
     struct SpriteObject {
+        uint32_t id = 0;
         Transform2D transform;
     };
     const std::array<Vertex, 6> QUAD = {
@@ -581,19 +582,21 @@ class VulkanApp {
         std::memcpy(mapped, QUAD.data(), sizeof(QUAD));
         device->unmapMemory(*vertexMemory);
     }
-    static SpriteObject makeSprite(glm::vec2 position, glm::vec2 scale, float rotation, float layer) {
-        return SpriteObject{Transform2D{position, scale, rotation, layer}};
+    static SpriteObject makeSprite(uint32_t id, glm::vec2 position, glm::vec2 scale, float rotation, int layer) {
+        return SpriteObject{id, Transform2D{position, scale, rotation, layer}};
     }
     void createSceneObjects() {
-        objects = {makeSprite({-0.65f, 0.15f}, {0.42f, 0.42f}, 0.0f, 0.0f),
-                   makeSprite({0.0f, -0.1f}, {0.58f, 0.58f}, glm::radians(12.0f), 1.0f),
-                   makeSprite({0.65f, 0.15f}, {0.42f, 0.42f}, glm::radians(-12.0f), 0.0f)};
+        objects = {makeSprite(0, {-0.18f, 0.18f}, {0.55f, 0.55f}, 0.0f, 0),
+                   makeSprite(1, {0.0f, 0.0f}, {0.55f, 0.55f}, 0.0f, 0),
+                   makeSprite(2, {0.18f, -0.18f}, {0.55f, 0.55f}, 0.0f, 0)};
     }
     void sortObjects() {
-        std::sort(objects.begin(), objects.end(), [](const SpriteObject& lhs, const SpriteObject& rhs) {
+        std::stable_sort(objects.begin(), objects.end(), [](const SpriteObject& lhs, const SpriteObject& rhs) {
             if (lhs.transform.layer != rhs.transform.layer)
                 return lhs.transform.layer < rhs.transform.layer;
-            return lhs.transform.position.y < rhs.transform.position.y;
+            if (lhs.transform.position.y != rhs.transform.position.y)
+                return lhs.transform.position.y > rhs.transform.position.y;
+            return lhs.id < rhs.id;
         });
     }
     static glm::mat4 modelMatrix(const Transform2D& transform) {
